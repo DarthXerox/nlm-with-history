@@ -9,32 +9,8 @@ from skimage.io import imread, imshow, imsave
 from matplotlib import pyplot as plt
 import time
 import cv2 as cv
-import torch
-
-def calculate_distance_squared_between_images(image1, x1, y1, image2, x2, y2, compare_window_size, use_torch = False):
-    """
-    Calculates simple MSE between the compared image windows, each window from a different image
-    :param image1: should be a padded noisy image of type np.ndarray
-    :param image2: should be a padded noisy image of type np.ndarray
-    """
-    f = (compare_window_size - 1) // 2
-
-    # np uses shallow copies when slicing
-    # maybe try to rewrite using for loops (avoid possible copying)
-    if use_torch:
-        tensor_sum = 0
-        for y in range(-f, f):
-            for x in range(-f, f):
-                tensor_sum += torch.square(image1[y1 + f, x1 + f] - image2[y2 + f, x2 + f]).item()
-        return tensor_sum / (compare_window_size * compare_window_size)
-        # return (torch.sum(torch.square(
-        #     image1[y1 - f:y1 + f, x1 - f:x1 + f].to(torch.device("cuda")) - image2[y2 - f:y2 + f, x2 - f:x2 + f].to(torch.device("cuda")))
-        # ) / (compare_window_size * compare_window_size)).item()
-
-    return np.sum(np.square(
-        image1[y1 - f:y1 + f, x1 - f:x1 + f] - image2[y2 - f:y2 + f, x2 - f:x2 + f])
-    ) / (compare_window_size * compare_window_size)
-
+#import torch
+import pandas as pd
 
 def calculate_distance_squared(image, x1, y1, x2, y2, compare_window_size):
     """
@@ -83,7 +59,7 @@ def denoise_nlm(img, search_window_size, compare_window_size, filter_strength, n
                                                    search_window_offset, compare_window_offset, compare_window_size)
             denoised_img[y - compare_window_offset, x - compare_window_offset] = value
 
-        print(f"{y - compare_window_offset + 1}/{img_height} rows done, elapsed time: {time.time() - start}s")
+        #print(f"{y - compare_window_offset + 1}/{img_height} rows done, elapsed time: {time.time() - start}s")
     return denoised_img
 
 
@@ -196,100 +172,106 @@ def denoise_nlm_with_history(img, history_images, search_window_size, compare_wi
                     calculate_pixel_denoised_value(padded_img, img_width, img_height, noise_sd, filter_strength, x,y,
                                                        search_window_offset, compare_window_offset, compare_window_size)
             denoised_img[y - compare_window_offset, x - compare_window_offset] /= len(history_images)
-        print(f"{y - compare_window_offset + 1}/{img_height} rows done, elapsed time: {time.time() - start}s")
+        #print(f"{y - compare_window_offset + 1}/{img_height} rows done, elapsed time: {time.time() - start}s")
     return denoised_img
 
 
-def denoise_nlm_with_history_smart(img, history_images, search_window_size, compare_window_size, filter_strength, noise_sd):
+def denoise_nlm_with_history_smart(img, history, search_window_size, compare_window_size, filter_strength, noise_sd,
+                                   n = 0, are_images_padded=False):
     """
-    :param history_images: these images are changed inside this function
+    :param history: these images are changed inside this function
     """
     img_height = img.shape[0]
     img_width = img.shape[1]
     search_window_offset = int((search_window_size - 1) // 2)
     compare_window_offset = int((compare_window_size - 1) // 2)
 
-    history_img_height = history_images[0].shape[0]
-    history_img_width = history_images[0].shape[1]
+    if n == 0:
+        n = len(history)
+    history_img_height = history[0].shape[0]
+    history_img_width = history[0].shape[1]
 
-    for i in range(len(history_images)):
-        history_images[i] = create_padded_img(history_images[i], compare_window_offset)
-    main_img = create_padded_img(img, compare_window_offset)
+    if not are_images_padded:
+        history_padded = []
+        for i in range(n):
+            history_padded.append(create_padded_img(history[i], compare_window_offset))
+        main_img = create_padded_img(img, compare_window_offset)
+    else:
+        history_padded = history
+        main_img = img
 
     start = time.time()
     denoised_img = np.zeros(img.shape)
     for y in range(compare_window_offset, compare_window_offset + img_height):
         for x in range(compare_window_offset, compare_window_offset + img_width):
-            for padded_img in history_images:
+            for i in range(n):
                 denoised_img[y - compare_window_offset, x - compare_window_offset] += \
-                    calculate_pixel_denoised_value_between_images(main_img, padded_img, history_img_width, history_img_height, noise_sd,
+                    calculate_pixel_denoised_value_between_images(main_img, history_padded[i], history_img_width, history_img_height, noise_sd,
                                                                   filter_strength, x, y, search_window_offset,
                                                                   compare_window_offset, compare_window_size)
-            denoised_img[y - compare_window_offset, x - compare_window_offset] /= len(history_images)
-        print(f"{y - compare_window_offset + 1}/{img_height} rows done, elapsed time: {time.time() - start}s")
+            denoised_img[y - compare_window_offset, x - compare_window_offset] /= len(history_padded)
+        #print(f"{y - compare_window_offset + 1}/{img_height} rows done, elapsed time: {time.time() - start}s")
 
     return denoised_img
 
 
-def gpu_denoise_nlm_with_history_smart(img, history_images, search_window_size, compare_window_size, filter_strength, noise_sd):
-    """
-    :param img: tensor input image, must be padded
-    :param history_images: these images are changed inside this function, MUST be tensors and must be padded
-    """
+def test_history_size_vs_window_size():
+    from skimage.metrics import mean_squared_error
+    import os
 
-    search_window_offset = int((search_window_size - 1) // 2)
+    sd = 0.05
+    strength = 0.078  # 0.35 * sd #
+    compare_window_size = 9  # ODD
     compare_window_offset = int((compare_window_size - 1) // 2)
-    img_height = img.shape[0] - compare_window_offset * 2
-    img_width = img.shape[1] - compare_window_offset * 2
+    # search_window_size = 35
+    samples_folder_prefix = '/home/xbuco/pv162-project/data/sample_1024_100ns/'
+    img0 = (imread(samples_folder_prefix + f"{0}.png", as_gray=True).astype(np.float64)) / 255
+    img0 = create_padded_img(img0, compare_window_offset)
+    max_win_size = 50
+
+    n = 40
+    history = []
+    for c in range(1, 1 + n):
+        history.append(create_padded_img(
+            (imread(samples_folder_prefix + f"{c}.png", as_gray=True).astype(np.float64)) / 255, compare_window_offset))
+    img_gt = imread("./cropped_middle_512_sample_1024.png", as_gray=True).astype(np.float64) / 255
+
+    df_filename = './results.csv'
+    if os.path.exists(df_filename):
+        df = pd.read_csv(df_filename)
+    else:
+        df = pd.DataFrame(columns=['sd', 'fs', 'history', 'sw', 'cw', 'MSE'])
+
+    for search_window_size in range(compare_window_size * 2 + 1, max_win_size, 4):
+        denoised_img = denoise_nlm(img0, search_window_size, compare_window_size, strength, sd)
+        mse = mean_squared_error(img_gt, denoised_img)
+        df = df.append({
+            'sd': sd,
+            'fs': strength,
+            'history': 0,
+            'sw': search_window_size,
+            'cw': compare_window_size,
+            'MSE': mse
+        }, ignore_index=True)
+        df.to_csv(df_filename, index=False)
+
+    for history_len in range(2, n, 2):
+        for search_window_size in range(compare_window_size * 2 + 1, max_win_size, 4):
+            denoised_img = denoise_nlm_with_history_smart(img0, history, search_window_size, compare_window_size,
+                                                          strength, sd, n, True)
+            mse = mean_squared_error(img_gt, denoised_img)
+            df = df.append({
+                'sd': sd,
+                'fs': strength,
+                'history': history_len,
+                'sw': search_window_size,
+                'cw': compare_window_size,
+                'MSE': mse
+            }, ignore_index=True)
+            df.to_csv(df_filename, index=False)
 
 
 
-    # for i in range(len(history_images)):
-    #     history_images[i] = create_padded_img(history_images[i], compare_window_offset)
-    # main_img = create_padded_img(img, compare_window_offset)
-
-    start = time.time()
-    denoised_img = torch.zeros(img_height, img_width)
-    for y in range(compare_window_offset, compare_window_offset + img_height):
-        for x in range(compare_window_offset, compare_window_offset + img_width):
-            for img_i in range(len(history_images)):
-                denoised_img[y - compare_window_offset, x - compare_window_offset] += \
-                    calculate_pixel_denoised_value_between_images(img, history_images[img_i], img_width, img_height,
-                                                                  noise_sd, filter_strength, x, y, search_window_offset,
-                                                                  compare_window_offset, compare_window_size, True)
-            denoised_img[y - compare_window_offset, x - compare_window_offset] /= len(history_images)
-        print(f"{y - compare_window_offset + 1}/{img_height} rows done, elapsed time: {time.time() - start}s")
-
-    return denoised_img
-
-
-
-# def denoise_nlm_incomplete_with_history(img, mask, history_images, search_window_size, compare_window_size,
-#                                         filter_strength, noise_sd):
-#     """
-#     :param mask: binary mask, that specifies which pixels were loaded correctly
-#     """
-#     img_height = img.shape[0]
-#     img_width = img.shape[1]
-#     search_window_offset = int((search_window_size - 1) // 2)
-#     compare_window_offset = int((compare_window_size - 1) // 2)
-#
-#     inverted_mask = (np.ones(mask.shape) - mask)
-#     for i in range(len(history_images)):
-#         history_images[i] = img * mask + history_images[i] * inverted_mask
-#         history_images[i] = create_padded_img(history_images[i], compare_window_offset)
-#
-#     start = time.time()
-#     denoised_img = np.zeros(img.shape)
-#     for y in range(compare_window_offset, compare_window_offset + img_height):
-#         for x in range(compare_window_offset, compare_window_offset + img_width):
-#             for padded_img in history_images:
-#                 denoised_img[y - compare_window_offset, x - compare_window_offset] += \
-#                     calculate_pixel_denoised_value(padded_img, img_width, img_height, noise_sd, filter_strength, x, y,
-#                                                    search_window_offset, compare_window_offset, compare_window_size)
-#             denoised_img[y - compare_window_offset, x - compare_window_offset] /= len(history_images)
-#         print(f"{y - compare_window_offset + 1}/{img_height} rows done, elapsed time: {time.time() - start}s")
-#     return denoised_img
 
 
 def main():
@@ -328,4 +310,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    #main()
+    test_history_size_vs_window_size()
