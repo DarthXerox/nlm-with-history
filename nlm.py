@@ -1,8 +1,6 @@
 # 23.4. 2023  Martin Bučo
 # my own implementation of NLM algorithm
 # main source https://www.ipol.im/pub/art/2011/bcm_nlm/article.pdf
-
-
 import numpy as np
 from scipy import ndimage
 from skimage.io import imread, imshow, imsave
@@ -10,6 +8,29 @@ from matplotlib import pyplot as plt
 import time
 import cv2 as cv
 import pandas as pd
+
+
+def compare_img_quality(gt_img, noisy_img, denoised_img):
+    # quality of the denoised img
+    print("# PSNR")
+    psnr_noisy = cv.PSNR(noisy_img, gt_img)
+    print(" ", psnr_noisy)
+    psnr_denoised = cv.PSNR(denoised_img, gt_img)
+    print(" ", psnr_denoised)
+
+    print("# SSIM")
+    from skimage.metrics import structural_similarity as ssim
+    ssim_noisy = ssim(gt_img, noisy_img, data_range=noisy_img.max() - noisy_img.min())
+    print(" ", ssim_noisy)
+    ssim_noisy = ssim(gt_img, denoised_img, data_range=denoised_img.max() - denoised_img.min())
+    print(" ", ssim_noisy)
+
+    print("# MSE")
+    from skimage.metrics import mean_squared_error
+    mse_noisy = mean_squared_error(gt_img, noisy_img)
+    print(" ", mse_noisy)
+    mse_denoised = mean_squared_error(gt_img, denoised_img)
+    print(" ", mse_denoised)
 
 
 def calculate_distance_squared_between_images(image1, x1, y1, image2, x2, y2, compare_window_size):
@@ -26,6 +47,7 @@ def calculate_distance_squared_between_images(image1, x1, y1, image2, x2, y2, co
         image1[y1 - f:y1 + f, x1 - f:x1 + f] - image2[y2 - f:y2 + f, x2 - f:x2 + f])
     ) / (compare_window_size * compare_window_size)
 
+
 def calculate_distance_squared(image, x1, y1, x2, y2, compare_window_size):
     """
     Calculates simple MSE between the compared image windows in the SAME image
@@ -41,47 +63,12 @@ def calculate_distance_squared(image, x1, y1, x2, y2, compare_window_size):
     return np.sum(np.square(window_1 - window_2)) / (compare_window_size * compare_window_size)
 
 
-# def calculate_distance_mean(image, x1, y1, x2, y2, compare_window_size):
-#     f = (compare_window_size - 1) // 2
-#     window_1 = image[y1 - f:y1 + f, x1 - f:x1 + f]
-#     window_2 = image[y2 - f:y2 + f, x2 - f:x2 + f]
-
-#     return ((np.mean(window_1) - np.mean(window_2)) ** 2) / (compare_window_size * compare_window_size)
-
-# is it (-sd^2) or (+sd^2) ?????
 def calculate_weight(d_squared, sd, strength):
     return np.exp(-max(d_squared - sd * sd, 0) / (strength * strength))
 
-# def calculate_weight2(d_squared, sd, strength):
-#     return np.exp(-(d_squared))
 
 def create_padded_img(img, compare_window_offset):
     return np.pad(img, compare_window_offset, mode='symmetric')
-
-
-def denoise_nlm(img, search_window_size, compare_window_size, filter_strength, noise_sd, are_images_padded=False):
-
-    search_window_offset = int((search_window_size - 1) // 2)
-    compare_window_offset = int((compare_window_size - 1) // 2)
-    start = time.time()
-    if not are_images_padded:
-        padded_img = create_padded_img(img, compare_window_offset)
-        img_height = img.shape[0]
-        img_width = img.shape[1]
-    else:
-        padded_img = img
-        img_height = img.shape[0] - 2 * compare_window_offset
-        img_width = img.shape[1] - 2 * compare_window_offset
-
-    denoised_img = np.zeros((img_height, img_width))
-    for y in range(compare_window_offset, compare_window_offset + img_height):
-        for x in range(compare_window_offset, compare_window_offset + img_width):
-            value = calculate_pixel_denoised_value(padded_img, img_width, img_height, noise_sd, filter_strength, x, y,
-                                                   search_window_offset, compare_window_offset, compare_window_size)
-            denoised_img[y - compare_window_offset, x - compare_window_offset] = value
-
-        #print(f"{y - compare_window_offset + 1}/{img_height} rows done, elapsed time: {time.time() - start}s")
-    return denoised_img
 
 
 def calculate_pixel_denoised_value(padded_img, img_width, img_height, noise_sd, filter_strength, x, y,
@@ -149,35 +136,31 @@ def show_original_with_denoised(original, denoised):
     plt.show()
 
 
+def denoise_nlm(img, search_window_size, compare_window_size, filter_strength, noise_sd, are_images_padded=False):
+
+    search_window_offset = int((search_window_size - 1) // 2)
+    compare_window_offset = int((compare_window_size - 1) // 2)
+    start = time.time()
+    if not are_images_padded:
+        padded_img = create_padded_img(img, compare_window_offset)
+        img_height = img.shape[0]
+        img_width = img.shape[1]
+    else:
+        padded_img = img
+        img_height = img.shape[0] - 2 * compare_window_offset
+        img_width = img.shape[1] - 2 * compare_window_offset
+
+    denoised_img = np.zeros((img_height, img_width))
+    for y in range(compare_window_offset, compare_window_offset + img_height):
+        for x in range(compare_window_offset, compare_window_offset + img_width):
+            value = calculate_pixel_denoised_value(padded_img, img_width, img_height, noise_sd, filter_strength, x, y,
+                                                   search_window_offset, compare_window_offset, compare_window_size)
+            denoised_img[y - compare_window_offset, x - compare_window_offset] = value
+
+    return denoised_img
 
 
-
-# def denoise_nlm_with_history(img, history_images, search_window_size, compare_window_size, filter_strength, noise_sd):
-#     """
-#     :param history_images: these images are changed inside this function
-#     """
-#     img_height = img.shape[0]
-#     img_width = img.shape[1]
-#     search_window_offset = int((search_window_size - 1) // 2)
-#     compare_window_offset = int((compare_window_size - 1) // 2)
-#
-#     for i in range(len(history_images)):
-#         history_images[i] = create_padded_img(history_images[i], compare_window_offset)
-#     history_images.append(create_padded_img(img, compare_window_offset))
-#
-#     start = time.time()
-#     denoised_img = np.zeros(img.shape)
-#     for y in range(compare_window_offset, compare_window_offset + img_height):
-#         for x in range(compare_window_offset, compare_window_offset + img_width):
-#             for padded_img in history_images:
-#                 denoised_img[y - compare_window_offset, x - compare_window_offset] += \
-#                     calculate_pixel_denoised_value(padded_img, img_width, img_height, noise_sd, filter_strength, x,y,
-#                                                        search_window_offset, compare_window_offset, compare_window_size)
-#             denoised_img[y - compare_window_offset, x - compare_window_offset] /= len(history_images)
-#     return denoised_img
-
-
-def nlm_with_history_averaging(img, history, search_window_size, compare_window_size, filter_strength, noise_sd,
+def denoise_nlm_with_history_averaging(img, history, search_window_size, compare_window_size, filter_strength, noise_sd,
                                n=-1, are_images_padded=False, denoised_img=None):
     compare_window_offset = int((compare_window_size - 1) // 2)
     if n == -1:
@@ -208,6 +191,7 @@ def nlm_with_history_averaging(img, history, search_window_size, compare_window_
 
     return denoised_img
 
+
 def denoise_history_averaging(img, history, n=-1):
     if n == -1:
         n = len(history)
@@ -222,13 +206,8 @@ def denoise_history_averaging(img, history, n=-1):
 
     return denoised_img
 
-# def nlm():
-#     pass
-# def nlm_with_smart_history():
-#     pass
 
-
-def denoise_nlm_with_history_smart(img, history, search_window_size, compare_window_size, filter_strength, noise_sd,
+def denoise_nlm_with_smart_history(img, history, search_window_size, compare_window_size, filter_strength, noise_sd,
                                    n=-1, are_images_padded=False, denoised_img=None):
     """
     :param img: noisy input image
@@ -306,104 +285,7 @@ def _denoise_nlm_history_smart(denoised_img, img_width, img_height, compare_wind
     return denoised_img
 
 
-# def shift_gt_img(img_gt, shift):
-#     # left = 200
-#     # top = 450
-#     width = 100
-#     height = 100
-#     left = 150
-#     top = 170
-#     return img_gt[top + shift : top + height + shift,
-#                   left + shift : left + width + shift]
-#
-#
-# def test_history_size_vs_window_size():
-#     from skimage.metrics import mean_squared_error
-#     import os
-#
-#     sd = 0.05
-#     strength = 0.078  # 0.35 * sd #
-#     compare_window_size = 9  # ODD
-#     compare_window_offset = int((compare_window_size - 1) // 2)
-#     # search_window_size = 35
-#     samples_folder_prefix = '/home/xbuco/pv162-project/data/100x100_100ns/'
-#     results_folder_prefix = '/home/xbuco/pv162-project/data/results/'
-#     img0 = (imread(samples_folder_prefix + f"{0}.png", as_gray=True).astype(np.float64)) / 255
-#     print(f"Before padding: {img0.shape}")
-#     img0 = create_padded_img(img0, compare_window_offset)
-#     print(f"After padding: {img0.shape}")
-#     max_win_size = 50
-#     win_increment = 8
-#
-#     n = 92
-#     history = []
-#     for c in range(1, 1 + n):
-#         history.append(create_padded_img(
-#             (imread(samples_folder_prefix + f"{c}.png", as_gray=True).astype(np.float64)) / 255, compare_window_offset))
-#     print(f"History with padding: {history[5].shape}")
-#
-#     img_gt_full = imread("./sample_1024.png", as_gray=True).astype(np.float64) / 255
-#     img_gt = shift_gt_img(img_gt_full, 0)
-#     print(f"GT img without padding: {img_gt.shape}")
-#
-#     df_filename = './results.csv'
-#     if os.path.exists(df_filename):
-#         df = pd.read_csv(df_filename)
-#     else:
-#         df = pd.DataFrame(columns=['sd', 'fs', 'history', 'sw', 'cw', 'MSE', 'time'])
-#
-#     #for search_window_size in range(35, max_win_size, win_increment):
-#     start_no_history = time.time()
-#     for search_window_size in [19, 27, 35, 43]:
-#         start = time.time()
-#         denoised_img = denoise_nlm(img0, search_window_size, compare_window_size, strength, sd, True)
-#         nlm_calc_time = time.time() - start
-#         mse = mean_squared_error(img_gt, denoised_img)
-#         df = df.append({
-#             'sd': sd,
-#             'fs': strength,
-#             'history': 0,
-#             'sw': search_window_size,
-#             'cw': compare_window_size,
-#             'MSE': mse,
-#             'time': nlm_calc_time
-#         }, ignore_index=True)
-#         df.to_csv(df_filename, index=False)
-#         imsave(f"{results_folder_prefix}h0_sw{search_window_size}_cw{compare_window_size}.png",
-#                (denoised_img * 255).astype(np.uint8))
-#     print(f"Basic nlm lasted for: {time.time() - start_no_history}s")
-#
-#
-#     # range(2, n, 2):
-#     for history_len in [1, 2, 3, 4, 5, 8, 10, 16, 32, 50, 64, 90]:
-#         # range(compare_window_size * 2 + 1, max_win_size, win_increment):
-#         start_one_history_len = time.time()
-#         for search_window_size in [19, 27, 35, 43]:
-#             start = time.time()
-#             denoised_img = denoise_nlm_with_history_smart(img0, history, search_window_size, compare_window_size,
-#                                                           strength, sd, history_len, True)
-#             nlm_calc_time = time.time() - start
-#             mse = mean_squared_error(img_gt, denoised_img)
-#             df = df.append({
-#                 'sd': sd,
-#                 'fs': strength,
-#                 'history': history_len,
-#                 'sw': search_window_size,
-#                 'cw': compare_window_size,
-#                 'MSE': mse,
-#                 'time': nlm_calc_time
-#             }, ignore_index=True)
-#             df.to_csv(df_filename, index=False)
-#             imsave(f"{results_folder_prefix}h{history_len}_sw{search_window_size}_cw{compare_window_size}.png",
-#                    (denoised_img * 255).astype(np.uint8))
-#
-#         print(f"Nlm with history of len {history_len} lasted for: {time.time() - start_one_history_len}s")
-#
-#
-#
-
-
-def main():
+if __name__ == "__main__":
     prefix = "/home/martinb/SCHOOL/pv162_project/"
     i = 2
     img = imread(prefix + f"data/input_images/samples_dark/{i}.png", as_gray=True).astype(np.uint8)
@@ -416,10 +298,10 @@ def main():
     ################################################################################################################
     ################################################################################################################
     ################################################################################################################
-    sd = 0.05
-    strength = 0.078#0.35 * sd #
-    compare_window_size = 9  # ODD
-    search_window_size = 35  # ODD! bigger than compare win
+    sd = 0.2632
+    strength = 0.35 * sd #
+    cw = 9  # ODD
+    sw = 35  # ODD! bigger than compare win
     # sd = 0.05
     # strength = 1  # 0.078#
     # compare_window_size = 5  # ODD
@@ -428,7 +310,7 @@ def main():
     ################################################################################################################
     ################################################################################################################
 
-    denoised_img = denoise_nlm(img_float, search_window_size, compare_window_size, strength, sd)
+    denoised_img = denoise_nlm(img_float, sw, cw, strength, sd)
     show_original_with_denoised(img_float, denoised_img)
 
     # plt.figure(figsize=(12, 6))
@@ -436,7 +318,3 @@ def main():
     # plt.show()
 
     imsave(f"./data/output_images/dark_200x100/{i}.png", (denoised_img * 255).astype(np.uint8))
-
-if __name__ == "__main__":
-    main()
-    # test_history_size_vs_window_size()
